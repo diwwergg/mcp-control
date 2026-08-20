@@ -8,6 +8,8 @@ import type {
   UiLocale,
   WorkspaceSummary,
 } from '@lnwjud/ipc-contracts';
+import { apiClient } from './api/client.js';
+import { connectDashboardSocket } from './api/socket.js';
 import { AppShell, type Screen } from './features/shell/AppShell.js';
 import { ControlCenterPage } from './features/home/ControlCenterPage.js';
 import { ProjectsPage } from './features/projects/ProjectsPage.js';
@@ -45,7 +47,7 @@ export function App(): ReactElement {
 
   useEffect(() => {
     let disposed = false;
-    void window.lnwjud.getLogSnapshot().then((snapshot) => {
+    void apiClient.getLogSnapshot().then((snapshot) => {
       if (disposed) return;
       setLogLines((previous) => {
         const merged = applyLogSnapshot(previous, logIds.current, snapshot.lines);
@@ -55,19 +57,14 @@ export function App(): ReactElement {
       setTunnelLogPath(snapshot.tunnelLogPath);
       setTunnelLogExists(snapshot.tunnelLogExists);
     }).catch(() => undefined);
-    const unsubscribe = window.lnwjud.onLogEvent((line) => {
-      appendLogLine(line);
-      if (line.source === 'tunnel') setTunnelLogExists(true);
-    });
     return (): void => {
       disposed = true;
-      unsubscribe();
     };
-  }, [appendLogLine]);
+  }, []);
 
   async function clearLogSource(source: LogSource): Promise<void> {
     try {
-      await window.lnwjud.clearLogBuffer({ source });
+      await apiClient.clearLogBuffer({ source });
       setLogLines((previous) => previous.filter((line) => line.source !== source));
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.logBufferClear')));
@@ -76,7 +73,7 @@ export function App(): ReactElement {
 
   async function exportLogSource(source: LogSource): Promise<void> {
     try {
-      await window.lnwjud.exportLogs({ source, filePath: '' });
+      await apiClient.exportLogs({ source, filePath: '' });
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.logExport')));
     }
@@ -84,7 +81,7 @@ export function App(): ReactElement {
 
   async function popOutLogViewer(): Promise<void> {
     try {
-      await window.lnwjud.openLogViewer();
+      await apiClient.openLogViewer();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.logViewerOpen')));
     }
@@ -93,8 +90,8 @@ export function App(): ReactElement {
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const [nextDashboard, nextWorkspaces] = await Promise.all([
-        window.lnwjud.getDashboard(),
-        window.lnwjud.listWorkspaces(),
+        apiClient.getDashboard(),
+        apiClient.listWorkspaces(),
       ]);
       setDashboard(nextDashboard);
       setWorkspaces(nextWorkspaces);
@@ -107,13 +104,33 @@ export function App(): ReactElement {
 
   useEffect(() => {
     void refresh();
-    const interval = window.setInterval(() => { void refresh(); }, 1_000);
+    // WebSocket `dashboard` pushes (below) deliver near-real-time updates after any
+    // mutation; this slow interval only catches background drift (e.g. a process
+    // exiting on its own) between pushes.
+    const interval = window.setInterval(() => { void refresh(); }, 5_000);
     return (): void => { window.clearInterval(interval); };
   }, [refresh]);
 
+  useEffect(() => {
+    const socket = connectDashboardSocket();
+    const unsubscribe = socket.subscribe((message) => {
+      if (message.type === 'dashboard') {
+        setDashboard(message.payload);
+        setLocale(message.payload.locale);
+        return;
+      }
+      appendLogLine(message.payload);
+      if (message.payload.source === 'tunnel') setTunnelLogExists(true);
+    });
+    return (): void => {
+      unsubscribe();
+      socket.close();
+    };
+  }, [appendLogLine]);
+
   async function addWorkspace(rootPath: string): Promise<void> {
     try {
-      await window.lnwjud.addWorkspace({ rootPath });
+      await apiClient.addWorkspace({ rootPath });
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.workspaceAdd')));
@@ -123,7 +140,7 @@ export function App(): ReactElement {
   async function selectWorkspace(workspaceId: string): Promise<void> {
     try {
       setMcpBusy(true);
-      await window.lnwjud.selectWorkspace({ workspaceId });
+      await apiClient.selectWorkspace({ workspaceId });
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.workspaceSelect')));
@@ -134,7 +151,7 @@ export function App(): ReactElement {
 
   async function setPermissionProfile(profile: PermissionProfileName): Promise<void> {
     try {
-      await window.lnwjud.setPermissionProfile({ profile });
+      await apiClient.setPermissionProfile({ profile });
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.permissionProfileChange')));
@@ -143,7 +160,7 @@ export function App(): ReactElement {
 
   async function setUnrestrictedMode(enabled: boolean): Promise<boolean> {
     try {
-      const result = await window.lnwjud.setUnrestrictedMode({ enabled });
+      const result = await apiClient.setUnrestrictedMode({ enabled });
       await refresh();
       return result.restartRequired;
     } catch (cause: unknown) {
@@ -155,7 +172,7 @@ export function App(): ReactElement {
   async function stopMcp(): Promise<void> {
     try {
       setMcpBusy(true);
-      await window.lnwjud.stopMcp();
+      await apiClient.stopMcp();
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.mcpStop')));
@@ -167,7 +184,7 @@ export function App(): ReactElement {
   async function restartMcp(): Promise<void> {
     try {
       setMcpBusy(true);
-      await window.lnwjud.restartMcp();
+      await apiClient.restartMcp();
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.mcpRestart')));
@@ -178,7 +195,7 @@ export function App(): ReactElement {
 
   async function clearWorkLog(): Promise<void> {
     try {
-      await window.lnwjud.clearWorkLog();
+      await apiClient.clearWorkLog();
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.workLogClear')));
@@ -188,7 +205,7 @@ export function App(): ReactElement {
   async function startTunnel(): Promise<void> {
     try {
       setTunnelBusy(true);
-      await window.lnwjud.startTunnel();
+      await apiClient.startTunnel();
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.tunnelStart')));
@@ -200,7 +217,7 @@ export function App(): ReactElement {
   async function stopTunnel(): Promise<void> {
     try {
       setTunnelBusy(true);
-      await window.lnwjud.stopTunnel();
+      await apiClient.stopTunnel();
       await refresh();
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.tunnelStop')));
@@ -210,24 +227,24 @@ export function App(): ReactElement {
   }
 
   async function saveTunnelApiKey(apiKey: string): Promise<void> {
-    await window.lnwjud.saveTunnelApiKey({ apiKey });
+    await apiClient.saveTunnelApiKey({ apiKey });
     await refresh();
   }
 
   async function setTunnelClientPath(clientPath: string): Promise<void> {
-    await window.lnwjud.setTunnelClientPath({ clientPath });
+    await apiClient.setTunnelClientPath({ clientPath });
     await refresh();
   }
 
   async function changeLocale(next: UiLocale): Promise<void> {
-    await window.lnwjud.setLocale({ locale: next });
+    await apiClient.setLocale({ locale: next });
     setLocale(next);
     await refresh();
   }
 
   async function runDoctor(): Promise<void> {
     try {
-      setDoctor(await window.lnwjud.runDoctor());
+      setDoctor(await apiClient.runDoctor());
     } catch (cause: unknown) {
       setError(errorMessage(cause, t('error.doctorRun')));
     }

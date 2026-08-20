@@ -71,7 +71,7 @@ import {
   type WorkLogEntry,
   type WorkspaceSummary,
 } from '@lnwjud/ipc-contracts';
-import type { DesktopIpcServices } from './main.js';
+import type { DesktopIpcServices } from './desktop-service-contract.js';
 import { buildCapabilitySummary, createLocalCapabilityRuntime } from './capability-runtime.js';
 import { LogHub } from './log-hub.js';
 import { DesktopMcpLifecycle } from './mcp-lifecycle.js';

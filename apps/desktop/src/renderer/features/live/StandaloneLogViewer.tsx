@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import type { LogLine, LogSource } from '@lnwjud/ipc-contracts';
+import { apiClient } from '../../api/client.js';
+import { connectDashboardSocket } from '../../api/socket.js';
 import { createTranslator } from '../../i18n/index.js';
 import { applyLogSnapshot } from './log-buffer.js';
 import { LogStreamPanel } from './LogStreamPanel.js';
@@ -22,7 +24,7 @@ export function StandaloneLogViewer(): ReactElement {
 
   useEffect(() => {
     let disposed = false;
-    void window.lnwjud.getLogSnapshot().then((snapshot) => {
+    void apiClient.getLogSnapshot().then((snapshot) => {
       if (disposed) return;
       setLines((previous) => {
         const merged = applyLogSnapshot(previous, logIds.current, snapshot.lines);
@@ -32,28 +34,31 @@ export function StandaloneLogViewer(): ReactElement {
       setTunnelLogPath(snapshot.tunnelLogPath);
       setTunnelLogExists(snapshot.tunnelLogExists);
     }).catch(() => undefined);
-    const unsubscribe = window.lnwjud.onLogEvent((line) => {
-      appendLine(line);
-      if (line.source === 'tunnel') setTunnelLogExists(true);
+    const socket = connectDashboardSocket();
+    const unsubscribe = socket.subscribe((message) => {
+      if (message.type !== 'log') return;
+      appendLine(message.payload);
+      if (message.payload.source === 'tunnel') setTunnelLogExists(true);
     });
     // Polling the dashboard keeps the work-log and process feeds flowing into the log hub.
     const interval = window.setInterval(() => {
-      void window.lnwjud.getDashboard().catch(() => undefined);
+      void apiClient.getDashboard().catch(() => undefined);
     }, 1_000);
     return (): void => {
       disposed = true;
       unsubscribe();
+      socket.close();
       window.clearInterval(interval);
     };
   }, [appendLine]);
 
   async function clear(source: LogSource): Promise<void> {
-    await window.lnwjud.clearLogBuffer({ source }).catch(() => undefined);
+    await apiClient.clearLogBuffer({ source }).catch(() => undefined);
     setLines((previous) => previous.filter((line) => line.source !== source));
   }
 
   async function exportLogs(source: LogSource): Promise<void> {
-    await window.lnwjud.exportLogs({ source, filePath: '' }).catch(() => undefined);
+    await apiClient.exportLogs({ source, filePath: '' }).catch(() => undefined);
   }
 
   const sources: readonly LogSource[] = ['tunnel', 'mcp', 'process'];

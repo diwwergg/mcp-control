@@ -5,12 +5,8 @@ import { BrowserWindow } from 'electron';
 
 const mainDirectory = path.dirname(fileURLToPath(import.meta.url));
 
-export function getPreloadPath(): string {
-  return path.resolve(mainDirectory, '..', 'preload', 'index.cjs');
-}
-
-export function getRendererEntryPath(): string {
-  return path.resolve(mainDirectory, '..', 'renderer', 'index.html');
+export function getRendererStaticRoot(): string {
+  return path.resolve(mainDirectory, '..', 'renderer');
 }
 
 export function getWindowIconPath(): string | undefined {
@@ -29,26 +25,25 @@ export function getWindowIconPath(): string | undefined {
   return undefined;
 }
 
-export function isAllowedRendererUrl(navigationUrl: string, rendererEntryPath: string): boolean {
+/** True when navigationUrl is same-origin with the dashboard website this app serves. */
+export function isAllowedRendererUrl(navigationUrl: string, dashboardOrigin: string): boolean {
   try {
     const parsedUrl = new URL(navigationUrl);
-    if (parsedUrl.protocol !== 'file:') return false;
-    const requestedPath = path.normalize(fileURLToPath(parsedUrl)).toLowerCase();
-    const allowedPath = path.normalize(rendererEntryPath).toLowerCase();
-    return requestedPath === allowedPath;
+    return parsedUrl.protocol === 'http:' && parsedUrl.origin === dashboardOrigin;
   } catch {
     return false;
   }
 }
 
-export function createMainWindow(): BrowserWindow {
-  const rendererEntryPath = getRendererEntryPath();
+function createDashboardWindow(dashboardUrl: string, options: { readonly width: number; readonly height: number; readonly title?: string }): BrowserWindow {
+  const dashboardOrigin = new URL(dashboardUrl).origin;
   const iconPath = getWindowIconPath();
-  const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+  const window = new BrowserWindow({
+    width: options.width,
+    height: options.height,
     show: true,
     autoHideMenuBar: true,
+    ...(options.title !== undefined ? { title: options.title } : {}),
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#07090e',
@@ -57,7 +52,6 @@ export function createMainWindow(): BrowserWindow {
     },
     ...(iconPath !== undefined ? { icon: iconPath } : {}),
     webPreferences: {
-      preload: getPreloadPath(),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -65,13 +59,19 @@ export function createMainWindow(): BrowserWindow {
     },
   });
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
-    if (!isAllowedRendererUrl(navigationUrl, rendererEntryPath)) event.preventDefault();
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isAllowedRendererUrl(navigationUrl, dashboardOrigin)) event.preventDefault();
   });
-  mainWindow.webContents.on('will-attach-webview', (event) => {
+  window.webContents.on('will-attach-webview', (event) => {
     event.preventDefault();
   });
+  void window.loadURL(dashboardUrl);
+  return window;
+}
+
+export function createMainWindow(dashboardUrl: string): BrowserWindow {
+  const mainWindow = createDashboardWindow(dashboardUrl, { width: 1280, height: 800 });
   const reveal = (): void => {
     if (mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -81,42 +81,11 @@ export function createMainWindow(): BrowserWindow {
   mainWindow.once('ready-to-show', reveal);
   // Fallback if ready-to-show never fires (blank/hung loads).
   setTimeout(reveal, 1_500);
-  void mainWindow.loadFile(rendererEntryPath);
   return mainWindow;
 }
 
-export function createLogViewerWindow(): BrowserWindow {
-  const rendererEntryPath = getRendererEntryPath();
-  const iconPath = getWindowIconPath();
-  const viewerWindow = new BrowserWindow({
-    width: 960,
-    height: 680,
-    show: true,
-    autoHideMenuBar: true,
-    title: 'lnwjud — Live Logs',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#07090e',
-      symbolColor: '#f5c542',
-      height: 38,
-    },
-    ...(iconPath !== undefined ? { icon: iconPath } : {}),
-    webPreferences: {
-      preload: getPreloadPath(),
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-    },
-  });
-
-  viewerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  viewerWindow.webContents.on('will-navigate', (event, navigationUrl) => {
-    if (!isAllowedRendererUrl(navigationUrl, rendererEntryPath)) event.preventDefault();
-  });
-  viewerWindow.webContents.on('will-attach-webview', (event) => {
-    event.preventDefault();
-  });
-  void viewerWindow.loadFile(rendererEntryPath, { hash: 'log-viewer' });
-  return viewerWindow;
+export function createLogViewerWindow(dashboardUrl: string): BrowserWindow {
+  const viewerUrl = new URL(dashboardUrl);
+  viewerUrl.hash = 'log-viewer';
+  return createDashboardWindow(viewerUrl.toString(), { width: 960, height: 680, title: 'lnwjud — Live Logs' });
 }
