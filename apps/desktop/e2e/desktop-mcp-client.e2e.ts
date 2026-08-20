@@ -171,7 +171,7 @@ test('desktop serves the real MCP client development workflow', async () => {
     browser = undefined;
   } finally {
     if (client !== undefined) await client.close().catch(() => undefined);
-    if (page !== undefined) await page.evaluate(() => window.lnwjud.stopMcp()).catch(() => undefined);
+    if (page !== undefined) await page.evaluate(() => fetch('/api/mcp/stop', { method: 'POST' })).catch(() => undefined);
     if (browser !== undefined) await browser.close().catch(() => undefined);
     if (electronProcess !== undefined) await terminateProcessTree(electronProcess);
     await Promise.all([removeTemporaryRoot(fixtureRoot), removeTemporaryRoot(dataRoot)]);

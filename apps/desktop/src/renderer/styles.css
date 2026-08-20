@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 @font-face {
   font-family: "Prompt";
   src: url("./fonts/prompt/Prompt-Regular.ttf") format("truetype");

@@ -112,9 +112,9 @@ Electron IPC → Live Logs / renderer UI   (apps/desktop)
 | `packages/mcp-server` | MCP tool registry plus stdio/HTTP transports (see `apps/desktop/CLAUDE.md`-equivalent notes below) |
 | `packages/capabilities` | local shell/CDP/Windows UI/input/vision/media/Office/scheduler/WSL capabilities |
 | `packages/extensions` | skills catalog and local MCP server bridge |
-| `packages/ipc-contracts` | typed Electron main/preload/renderer IPC contracts |
+| `packages/ipc-contracts` | shared dashboard API routes/types and Electron IPC contracts |
 | `apps/cli` | CLI parser and local service entrypoints, incl. the packaged stdio launcher (`apps/cli/src/bin/mcp-stdio.ts`) |
-| `apps/desktop` | Electron main/preload/renderer, local HTTP MCP server, tunnel management |
+| `apps/desktop` | Electron shell serving the dashboard as a website (HTTP + WebSocket), local HTTP MCP server, tunnel management |
 
 All entrypoints (CLI, stdio launcher, desktop HTTP server) are intended to
 call the same `packages/application` services so validation and permissions

@@ -28,11 +28,11 @@ test('renderer cannot access Node globals', async () => {
     const page = context.pages()[0];
     if (page === undefined) throw new Error('Electron did not create a renderer page');
     await expect(page.getByRole('banner').getByText('lnwjud', { exact: true })).toBeVisible({ timeout: 30_000 });
+    expect(page.url().startsWith('http://127.0.0.1:')).toBe(true);
     await expect.poll(async () => page.evaluate(() => ({
       process: typeof Reflect.get(window, 'process'),
       require: typeof Reflect.get(window, 'require'),
-      api: typeof window.lnwjud?.listWorkspaces,
-    }))).toEqual({ process: 'undefined', require: 'undefined', api: 'function' });
+    }))).toEqual({ process: 'undefined', require: 'undefined' });
     await browser.close();
   } finally {
     await terminateProcessTree(electronProcess);

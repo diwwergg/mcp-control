@@ -1,407 +1,74 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { writeFile } from 'node:fs/promises';
-import {
-  APP_NAME,
-  APP_VERSION,
-  ipcChannels,
-  pushChannels,
-  type AddWorkspaceRequest,
-  type ClearLogBufferRequest,
-  type DashboardSnapshot,
-  type DoctorReport,
-  type ExportLogsRequest,
-  type IpcResponseMap,
-  type LogSnapshot,
-  type ManagedBrowserStatus,
-  type McpConnectionStatus,
-  type ProcessSummary,
-  type PermissionProfileName,
-  type SaveTunnelApiKeyRequest,
-  type SelectWorkspaceRequest,
-  type SetLocaleRequest,
-  type SetPermissionProfileRequest,
-  type SetTunnelClientPathRequest,
-  type SetUnrestrictedModeRequest,
-  type StartMcpRequest,
-  type StartProcessRequest,
-  type StopProcessRequest,
-  type TunnelStatus,
-  type UiLocale,
-  type WorkspaceSummary,
-} from '@lnwjud/ipc-contracts';
+import { APP_NAME, type WsMessage } from '@lnwjud/ipc-contracts';
 import { startMcpStdio } from '@lnwjud/mcp-server';
+import { DEFAULT_DASHBOARD_PORT, startDashboardServer, type DashboardServerHandle } from './dashboard-server.js';
+import { attachDashboardWs, type DashboardWsHandle } from './dashboard-ws.js';
 import { createDesktopRuntime, type DesktopRuntime } from './desktop-services.js';
 import { shouldHoldSingleInstanceLock, wantsMcpStdio } from './instance-lock.js';
-import { createLogViewerWindow, createMainWindow, getRendererEntryPath, getWindowIconPath, isAllowedRendererUrl } from './window.js';
+import { createLogViewerWindow, createMainWindow, getRendererStaticRoot, getWindowIconPath } from './window.js';
 import { createTrayMenuTemplate, shouldHideMainWindowOnClose } from './tray.js';
-
-export interface DesktopIpcServices {
-  listWorkspaces(): Promise<IpcResponseMap[typeof ipcChannels.listWorkspaces]>;
-  addWorkspace(request: AddWorkspaceRequest): Promise<WorkspaceSummary>;
-  selectWorkspace(request: SelectWorkspaceRequest): Promise<WorkspaceSummary>;
-  getDashboard(): Promise<DashboardSnapshot>;
-  setPermissionProfile(request: SetPermissionProfileRequest): Promise<{ readonly profile: PermissionProfileName }>;
-  setUnrestrictedMode(request: SetUnrestrictedModeRequest): Promise<{ readonly unrestricted: boolean; readonly restartRequired: boolean }>;
-  listProcesses(): Promise<IpcResponseMap[typeof ipcChannels.listProcesses]>;
-  startProcess(request: StartProcessRequest): Promise<IpcResponseMap[typeof ipcChannels.startProcess]>;
-  stopProcess(request: StopProcessRequest): Promise<{ readonly stopped: boolean }>;
-  startMcp(request: StartMcpRequest): Promise<McpConnectionStatus>;
-  stopMcp(): Promise<McpConnectionStatus>;
-  restartMcp(): Promise<McpConnectionStatus>;
-  clearWorkLog(): Promise<{ readonly cleared: boolean }>;
-  saveTunnelApiKey(request: SaveTunnelApiKeyRequest): Promise<{ readonly saved: boolean }>;
-  startTunnel(): Promise<TunnelStatus>;
-  stopTunnel(): Promise<TunnelStatus>;
-  getTunnelStatus(): Promise<TunnelStatus>;
-  setTunnelClientPath(request: SetTunnelClientPathRequest): Promise<{ readonly clientPath: string }>;
-  setLocale(request: SetLocaleRequest): Promise<{ readonly locale: UiLocale }>;
-  launchManagedBrowser(): Promise<ManagedBrowserStatus>;
-  runDoctor(): Promise<DoctorReport>;
-  getLogSnapshot(): Promise<LogSnapshot>;
-  clearLogBuffer(request: ClearLogBufferRequest): Promise<{ readonly cleared: boolean }>;
-}
-
-export type MainWindowProvider = () => BrowserWindow | null;
-
-const emptyTunnel: TunnelStatus = {
-  state: 'stopped',
-  source: 'desktop',
-  hasApiKey: false,
-  clientPath: null,
-  profileExists: false,
-  message: null,
-  logPath: null,
-};
-
-const defaultDesktopServices: DesktopIpcServices = {
-  listWorkspaces: async (): Promise<readonly WorkspaceSummary[]> => [],
-  addWorkspace: async (): Promise<WorkspaceSummary> => {
-    throw new Error('Workspace service is not configured');
-  },
-  selectWorkspace: async (): Promise<WorkspaceSummary> => {
-    throw new Error('Workspace service is not configured');
-  },
-  getDashboard: async (): Promise<DashboardSnapshot> => ({
-    selectedWorkspace: null,
-    gitSummary: { branch: null, changedFiles: 0, stagedFiles: 0, message: 'No workspace selected' },
-    mcp: { running: false, url: null, workspaceId: null },
-    codex: { installed: false, version: null },
-    managedProcessCount: 0,
-    auditEventCount: 0,
-    recentAuditEvents: [],
-    permissionProfile: 'safe',
-    capabilities: [],
-    agentState: 'stopped',
-    mode: 'WORK',
-    locale: 'th',
-    unrestricted: false,
-    connectionModes: { httpUrl: null, stdioCommand: 'lnwjud.exe --mcp-stdio' },
-    workLog: [],
-    inFlight: [],
-    tunnel: emptyTunnel,
-    appVersion: APP_VERSION,
-  }),
-  setPermissionProfile: async (request): Promise<{ readonly profile: PermissionProfileName }> => ({ profile: request.profile }),
-  setUnrestrictedMode: async (request): Promise<{ readonly unrestricted: boolean; readonly restartRequired: boolean }> => ({
-    unrestricted: request.enabled,
-    restartRequired: false,
-  }),
-  listProcesses: async (): Promise<readonly ProcessSummary[]> => [],
-  startProcess: async (): Promise<IpcResponseMap[typeof ipcChannels.startProcess]> => {
-    throw new Error('Desktop services are not configured');
-  },
-  stopProcess: async (): Promise<{ readonly stopped: boolean }> => ({ stopped: false }),
-  startMcp: async (): Promise<McpConnectionStatus> => ({ running: false, url: null, workspaceId: null }),
-  stopMcp: async (): Promise<McpConnectionStatus> => ({ running: false, url: null, workspaceId: null }),
-  restartMcp: async (): Promise<McpConnectionStatus> => ({ running: false, url: null, workspaceId: null }),
-  clearWorkLog: async (): Promise<{ readonly cleared: boolean }> => ({ cleared: false }),
-  saveTunnelApiKey: async (): Promise<{ readonly saved: boolean }> => ({ saved: false }),
-  startTunnel: async (): Promise<TunnelStatus> => emptyTunnel,
-  stopTunnel: async (): Promise<TunnelStatus> => emptyTunnel,
-  getTunnelStatus: async (): Promise<TunnelStatus> => emptyTunnel,
-  setTunnelClientPath: async (request): Promise<{ readonly clientPath: string }> => ({ clientPath: request.clientPath }),
-  setLocale: async (request): Promise<{ readonly locale: UiLocale }> => ({ locale: request.locale }),
-  launchManagedBrowser: async (): Promise<ManagedBrowserStatus> => ({ ready: false, port: 9222, launched: false }),
-  runDoctor: async (): Promise<DoctorReport> => ({
-    checks: [{ id: 'desktop', required: true, status: 'fail', message: 'Desktop services are not configured' }],
-    exitCode: 1,
-  }),
-  getLogSnapshot: async (): Promise<LogSnapshot> => ({
-    lines: [],
-    tunnelLogPath: null,
-    tunnelLogExists: false,
-  }),
-  clearLogBuffer: async (): Promise<{ readonly cleared: boolean }> => ({ cleared: false }),
-};
-
-export function isTrustedIpcSender(event: IpcMainInvokeEvent, window: BrowserWindow | null): boolean {
-  void window;
-  const senderFrame = event.senderFrame;
-  return senderFrame !== null && isAllowedRendererUrl(senderFrame.url, getRendererEntryPath());
-}
-
-export function registerIpcHandlers(
-  getMainWindow: MainWindowProvider,
-  services: DesktopIpcServices = defaultDesktopServices,
-): void {
-  ipcMain.handle(ipcChannels.listWorkspaces, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.listWorkspaces();
-  });
-  ipcMain.handle(ipcChannels.addWorkspace, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.addWorkspace(parseAddWorkspaceRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.selectWorkspace, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.selectWorkspace(parseSelectWorkspaceRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.getDashboard, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.getDashboard();
-  });
-  ipcMain.handle(ipcChannels.setPermissionProfile, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.setPermissionProfile(parseSetPermissionProfileRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.setUnrestrictedMode, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.setUnrestrictedMode(parseSetUnrestrictedModeRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.listProcesses, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.listProcesses();
-  });
-  ipcMain.handle(ipcChannels.startProcess, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.startProcess(parseStartProcessRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.stopProcess, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.stopProcess(parseStopProcessRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.startMcp, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.startMcp(parseStartMcpRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.stopMcp, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.stopMcp();
-  });
-  ipcMain.handle(ipcChannels.restartMcp, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.restartMcp();
-  });
-  ipcMain.handle(ipcChannels.clearWorkLog, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.clearWorkLog();
-  });
-  ipcMain.handle(ipcChannels.saveTunnelApiKey, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.saveTunnelApiKey(parseSaveTunnelApiKeyRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.startTunnel, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.startTunnel();
-  });
-  ipcMain.handle(ipcChannels.stopTunnel, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.stopTunnel();
-  });
-  ipcMain.handle(ipcChannels.getTunnelStatus, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.getTunnelStatus();
-  });
-  ipcMain.handle(ipcChannels.setTunnelClientPath, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.setTunnelClientPath(parseSetTunnelClientPathRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.setLocale, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.setLocale(parseSetLocaleRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.launchManagedBrowser, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.launchManagedBrowser();
-  });
-  ipcMain.handle(ipcChannels.runDoctor, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.runDoctor();
-  });
-  ipcMain.handle(ipcChannels.getLogSnapshot, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return services.getLogSnapshot();
-  });
-  ipcMain.handle(ipcChannels.clearLogBuffer, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return services.clearLogBuffer(parseClearLogBufferRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.exportLogs, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    return exportLogsToFile(getMainWindow(), services, parseExportLogsRequest(payload));
-  });
-  ipcMain.handle(ipcChannels.openLogViewer, async (event, payload: unknown) => {
-    assertTrustedSender(event, getMainWindow());
-    assertNoPayload(payload);
-    return { opened: openLogViewerWindow() !== null };
-  });
-}
-
-function assertTrustedSender(event: IpcMainInvokeEvent, mainWindow: BrowserWindow | null): void {
-  if (mainWindow === null || !isTrustedIpcSender(event, mainWindow)) throw new Error('IPC sender rejected');
-}
-
-function assertNoPayload(payload: unknown): void {
-  if (payload !== undefined) throw new Error('Invalid IPC payload');
-}
-
-function parseAddWorkspaceRequest(payload: unknown): AddWorkspaceRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  return { rootPath: nonEmptyString(payload.rootPath, 'rootPath') };
-}
-
-function parseSelectWorkspaceRequest(payload: unknown): SelectWorkspaceRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  return { workspaceId: nonEmptyString(payload.workspaceId, 'workspaceId') };
-}
-
-function parseSetPermissionProfileRequest(payload: unknown): SetPermissionProfileRequest {
-  if (!isRecord(payload) || !isPermissionProfile(payload.profile)) throw new Error('Invalid IPC payload');
-  return { profile: payload.profile };
-}
-
-function parseSetUnrestrictedModeRequest(payload: unknown): SetUnrestrictedModeRequest {
-  if (!isRecord(payload) || typeof payload.enabled !== 'boolean') throw new Error('Invalid IPC payload: enabled');
-  return { enabled: payload.enabled };
-}
-
-function parseClearLogBufferRequest(payload: unknown): ClearLogBufferRequest {
-  if (!isRecord(payload) || !isLogSource(payload.source)) throw new Error('Invalid IPC payload: source');
-  return { source: payload.source };
-}
-
-function parseExportLogsRequest(payload: unknown): ExportLogsRequest {
-  if (!isRecord(payload) || !isLogSource(payload.source)) {
-    throw new Error('Invalid IPC payload');
-  }
-  return {
-    source: payload.source,
-    filePath: typeof payload.filePath === 'string' ? payload.filePath : '',
-  };
-}
-
-function isLogSource(value: unknown): value is 'tunnel' | 'mcp' | 'process' {
-  return value === 'tunnel' || value === 'mcp' || value === 'process';
-}
-
-async function exportLogsToFile(
-  window: BrowserWindow | null,
-  services: DesktopIpcServices,
-  request: ExportLogsRequest,
-): Promise<{ readonly exported: boolean }> {
-  if (window === null) return { exported: false };
-  const result = await dialog.showSaveDialog(window, {
-    title: 'Export lnwjud logs',
-    defaultPath: `lnwjud-${request.source}-logs.txt`,
-    filters: [{ name: 'Text', extensions: ['txt', 'log'] }],
-  });
-  if (result.canceled || result.filePath === undefined || result.filePath.length === 0) {
-    return { exported: false };
-  }
-  const snapshot = await services.getLogSnapshot();
-  const content = snapshot.lines
-    .filter((line) => line.source === request.source)
-    .map((line) => `[${line.timestamp}] [${line.level.toUpperCase()}] ${line.text}`)
-    .join('\r\n');
-  await writeFile(result.filePath, content.length === 0 ? '' : `${content}\r\n`, 'utf8');
-  return { exported: true };
-}
-
-function broadcastToAllWindows(channel: string, payload: unknown): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send(channel, payload);
-    }
-  }
-}
-
-function parseStopProcessRequest(payload: unknown): StopProcessRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  return { processId: nonEmptyString(payload.processId, 'processId') };
-}
-
-function parseStartProcessRequest(payload: unknown): StartProcessRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  if (!isNonEmptyString(payload.workspaceId)) throw new Error('Invalid IPC payload: workspaceId');
-  if (payload.mode !== 'fixture' && payload.mode !== 'project-dev') throw new Error('Invalid IPC payload: mode');
-  return { workspaceId: payload.workspaceId, mode: payload.mode };
-}
-
-function parseStartMcpRequest(payload: unknown): StartMcpRequest {
-  if (!isRecord(payload) || !isNonEmptyString(payload.workspaceId)) throw new Error('Invalid IPC payload: workspaceId');
-  return { workspaceId: payload.workspaceId };
-}
-
-function parseSaveTunnelApiKeyRequest(payload: unknown): SaveTunnelApiKeyRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  return { apiKey: nonEmptyString(payload.apiKey, 'apiKey') };
-}
-
-function parseSetTunnelClientPathRequest(payload: unknown): SetTunnelClientPathRequest {
-  if (!isRecord(payload)) throw new Error('Invalid IPC payload');
-  return { clientPath: nonEmptyString(payload.clientPath, 'clientPath') };
-}
-
-function parseSetLocaleRequest(payload: unknown): SetLocaleRequest {
-  if (!isRecord(payload) || (payload.locale !== 'th' && payload.locale !== 'en')) throw new Error('Invalid IPC payload: locale');
-  return { locale: payload.locale };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) throw new Error(`Invalid IPC payload: ${field}`);
-  return value;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isPermissionProfile(value: unknown): value is PermissionProfileName {
-  return value === 'safe' || value === 'balanced' || value === 'full' || value === 'custom';
-}
 
 let mainWindow: BrowserWindow | null = null;
 let logViewerWindow: BrowserWindow | null = null;
 let desktopRuntime: DesktopRuntime | null = null;
+let dashboardServer: DashboardServerHandle | null = null;
+let dashboardWs: DashboardWsHandle | null = null;
+let dashboardUrl: string | null = null;
 let tray: Tray | null = null;
 let quitRequested = false;
 let shutdownStarted = false;
 
+function readDashboardPort(value: string | undefined): number {
+  if (value === undefined || value.trim().length === 0) return DEFAULT_DASHBOARD_PORT;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error('LNWJUD_DASHBOARD_PORT must be an integer from 0 to 65535');
+  }
+  return port;
+}
+
+async function startDashboard(runtime: DesktopRuntime): Promise<string> {
+  const server = await startDashboardServer({
+    port: readDashboardPort(process.env.LNWJUD_DASHBOARD_PORT),
+    staticRoot: getRendererStaticRoot(),
+    services: runtime.services,
+    getMainWindow: () => mainWindow,
+    openLogViewer: (): boolean => openLogViewerWindow() !== null,
+    onMutation: (): void => {
+      void runtime.services.getDashboard().then((snapshot) => {
+        dashboardWs?.broadcast({ type: 'dashboard', payload: snapshot });
+      }).catch(() => undefined);
+    },
+  });
+  dashboardServer = server;
+  dashboardWs = attachDashboardWs({ server: server.server });
+  runtime.logHub.setOnLine((line) => {
+    const message: WsMessage = { type: 'log', payload: line };
+    dashboardWs?.broadcast(message);
+  });
+  const url = `http://${server.address.host}:${server.address.port}/`;
+  dashboardUrl = url;
+  return url;
+}
+
+async function stopDashboard(): Promise<void> {
+  await dashboardWs?.close();
+  await dashboardServer?.close();
+  dashboardWs = null;
+  dashboardServer = null;
+  dashboardUrl = null;
+}
+
 function openLogViewerWindow(): BrowserWindow | null {
+  if (dashboardUrl === null) return null;
   if (logViewerWindow !== null && !logViewerWindow.isDestroyed()) {
     if (logViewerWindow.isMinimized()) logViewerWindow.restore();
     logViewerWindow.show();
     logViewerWindow.focus();
     return logViewerWindow;
   }
-  const viewer = createLogViewerWindow();
+  const viewer = createLogViewerWindow(dashboardUrl);
   logViewerWindow = viewer;
   viewer.on('closed', () => {
     logViewerWindow = null;
@@ -409,8 +76,8 @@ function openLogViewerWindow(): BrowserWindow | null {
   return viewer;
 }
 
-function createDesktopWindow(): void {
-  mainWindow = createMainWindow();
+function createDesktopWindow(url: string): void {
+  mainWindow = createMainWindow(url);
   mainWindow.on('close', (event) => {
     if (!shouldHideMainWindowOnClose(quitRequested)) return;
     event.preventDefault();
@@ -423,7 +90,7 @@ function createDesktopWindow(): void {
 
 function revealMainWindow(): void {
   if (mainWindow === null || mainWindow.isDestroyed()) {
-    createDesktopWindow();
+    if (dashboardUrl !== null) createDesktopWindow(dashboardUrl);
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -554,23 +221,29 @@ function initAutoUpdater(): void {
 
     autoUpdater.on('update-available', (info) => {
       console.log(`[AutoUpdater] Update available: v${info.version}`);
-      broadcastToAllWindows(pushChannels.logEvent, {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        level: 'info',
-        source: 'process',
-        text: `[AutoUpdater] Version v${info.version} is available and downloading in background...`,
+      dashboardWs?.broadcast({
+        type: 'log',
+        payload: {
+          id: Date.now(),
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          source: 'process',
+          text: `[AutoUpdater] Version v${info.version} is available and downloading in background...`,
+        },
       });
     });
 
     autoUpdater.on('update-downloaded', (info) => {
       console.log(`[AutoUpdater] Downloaded update: v${info.version}`);
-      broadcastToAllWindows(pushChannels.logEvent, {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        level: 'info',
-        source: 'process',
-        text: `[AutoUpdater] Update v${info.version} downloaded! Ready to install.`,
+      dashboardWs?.broadcast({
+        type: 'log',
+        payload: {
+          id: Date.now(),
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          source: 'process',
+          text: `[AutoUpdater] Update v${info.version} downloaded! Ready to install.`,
+        },
       });
       void dialog.showMessageBox({
         type: 'info',
@@ -604,19 +277,18 @@ function bootstrapDesktop(): void {
     app.setAppUserModelId('com.lnwjud.desktop');
     const runtime = createDesktopRuntime(dataPath);
     desktopRuntime = runtime;
-    runtime.logHub.setOnLine((line) => broadcastToAllWindows(pushChannels.logEvent, line));
     runtime.logHub.start();
-    registerIpcHandlers(() => mainWindow, runtime.services);
+    const url = await startDashboard(runtime);
     try {
       await runtime.autoStartMcp();
     } catch (error: unknown) {
       console.error(`MCP auto-start failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
-    createDesktopWindow();
+    createDesktopWindow(url);
     createDesktopTray();
     initAutoUpdater();
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createDesktopWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createDesktopWindow(url);
     });
   });
   app.on('before-quit', () => {
@@ -640,9 +312,8 @@ function bootstrapLogViewerOnly(): void {
     app.setAppUserModelId('com.lnwjud.desktop');
     const runtime = createDesktopRuntime(dataPath);
     desktopRuntime = runtime;
-    runtime.logHub.setOnLine((line) => broadcastToAllWindows(pushChannels.logEvent, line));
     runtime.logHub.start();
-    registerIpcHandlers(() => mainWindow, runtime.services);
+    await startDashboard(runtime);
     const viewer = openLogViewerWindow();
     if (viewer !== null) {
       mainWindow = viewer;
@@ -664,6 +335,7 @@ function bootstrapLogViewerOnly(): void {
 
 async function closeDesktopRuntimeAndQuit(): Promise<void> {
   try {
+    await stopDashboard();
     await desktopRuntime?.close();
   } catch (error: unknown) {
     console.error(`Desktop shutdown failed: ${error instanceof Error ? error.message : 'unknown error'}`);

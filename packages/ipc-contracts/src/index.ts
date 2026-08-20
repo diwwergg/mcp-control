@@ -1,39 +1,58 @@
 export const APP_NAME = 'lnwjud';
 export const APP_VERSION = '4.0.0';
 
-export const ipcChannels = {
-  listWorkspaces: 'lnwjud:list-workspaces',
-  addWorkspace: 'lnwjud:add-workspace',
-  selectWorkspace: 'lnwjud:select-workspace',
-  getDashboard: 'lnwjud:get-dashboard',
-  setPermissionProfile: 'lnwjud:set-permission-profile',
-  setUnrestrictedMode: 'lnwjud:set-unrestricted-mode',
-  listProcesses: 'lnwjud:list-processes',
-  startProcess: 'lnwjud:start-process',
-  stopProcess: 'lnwjud:stop-process',
-  startMcp: 'lnwjud:start-mcp',
-  stopMcp: 'lnwjud:stop-mcp',
-  restartMcp: 'lnwjud:restart-mcp',
-  clearWorkLog: 'lnwjud:clear-work-log',
-  saveTunnelApiKey: 'lnwjud:save-tunnel-api-key',
-  startTunnel: 'lnwjud:start-tunnel',
-  stopTunnel: 'lnwjud:stop-tunnel',
-  getTunnelStatus: 'lnwjud:get-tunnel-status',
-  setTunnelClientPath: 'lnwjud:set-tunnel-client-path',
-  setLocale: 'lnwjud:set-locale',
-  launchManagedBrowser: 'lnwjud:launch-managed-browser',
-  runDoctor: 'lnwjud:run-doctor',
-  getLogSnapshot: 'lnwjud:get-log-snapshot',
-  clearLogBuffer: 'lnwjud:clear-log-buffer',
-  exportLogs: 'lnwjud:export-logs',
-  openLogViewer: 'lnwjud:open-log-viewer',
-} as const;
+export interface ApiRouteDefinition {
+  readonly method: 'GET' | 'POST';
+  readonly path: string;
+}
 
-export const pushChannels = {
-  logEvent: 'lnwjud:event:log',
-} as const;
+/**
+ * REST route for every dashboard operation, served by the loopback dashboard
+ * HTTP server (apps/desktop/src/main/dashboard-server.ts) and consumed by the
+ * renderer's fetch-based client (apps/desktop/src/renderer/api/client.ts).
+ */
+export const apiRoutes = {
+  listWorkspaces: { method: 'GET', path: '/api/workspaces' },
+  addWorkspace: { method: 'POST', path: '/api/workspaces' },
+  selectWorkspace: { method: 'POST', path: '/api/workspaces/select' },
+  getDashboard: { method: 'GET', path: '/api/dashboard' },
+  setPermissionProfile: { method: 'POST', path: '/api/permission-profile' },
+  setUnrestrictedMode: { method: 'POST', path: '/api/unrestricted-mode' },
+  listProcesses: { method: 'GET', path: '/api/processes' },
+  startProcess: { method: 'POST', path: '/api/processes' },
+  stopProcess: { method: 'POST', path: '/api/processes/stop' },
+  startMcp: { method: 'POST', path: '/api/mcp/start' },
+  stopMcp: { method: 'POST', path: '/api/mcp/stop' },
+  restartMcp: { method: 'POST', path: '/api/mcp/restart' },
+  clearWorkLog: { method: 'POST', path: '/api/work-log/clear' },
+  saveTunnelApiKey: { method: 'POST', path: '/api/tunnel/api-key' },
+  startTunnel: { method: 'POST', path: '/api/tunnel/start' },
+  stopTunnel: { method: 'POST', path: '/api/tunnel/stop' },
+  getTunnelStatus: { method: 'GET', path: '/api/tunnel/status' },
+  setTunnelClientPath: { method: 'POST', path: '/api/tunnel/client-path' },
+  setLocale: { method: 'POST', path: '/api/locale' },
+  launchManagedBrowser: { method: 'POST', path: '/api/managed-browser/launch' },
+  runDoctor: { method: 'POST', path: '/api/doctor/run' },
+  getLogSnapshot: { method: 'GET', path: '/api/logs' },
+  clearLogBuffer: { method: 'POST', path: '/api/logs/clear' },
+  exportLogs: { method: 'POST', path: '/api/logs/export' },
+  openLogViewer: { method: 'POST', path: '/api/log-viewer/open' },
+} as const satisfies Record<string, ApiRouteDefinition>;
 
-export type IpcChannel = typeof ipcChannels[keyof typeof ipcChannels];
+export type ApiOperation = keyof typeof apiRoutes;
+
+/** WebSocket path the dashboard server upgrades on (apps/desktop/src/main/dashboard-ws.ts). */
+export const DASHBOARD_WS_PATH = '/ws';
+
+/**
+ * Real-time messages pushed over the dashboard WebSocket. `log` replaces the
+ * old Electron `pushChannels.logEvent` IPC push; `dashboard` is emitted after
+ * any mutating operation so the UI stays live without polling.
+ */
+export type WsMessage =
+  | { readonly type: 'log'; readonly payload: LogLine }
+  | { readonly type: 'dashboard'; readonly payload: DashboardSnapshot };
+
 export type PermissionProfileName = 'safe' | 'balanced' | 'full' | 'custom';
 export type UiLocale = 'th' | 'en';
 export type AgentState = 'stopped' | 'idle' | 'busy';
@@ -248,87 +267,87 @@ export interface ManagedBrowserStatus {
   readonly launched: boolean;
 }
 
-export interface IpcRequestMap {
-  readonly [ipcChannels.listWorkspaces]: undefined;
-  readonly [ipcChannels.addWorkspace]: AddWorkspaceRequest;
-  readonly [ipcChannels.selectWorkspace]: SelectWorkspaceRequest;
-  readonly [ipcChannels.getDashboard]: undefined;
-  readonly [ipcChannels.setPermissionProfile]: SetPermissionProfileRequest;
-  readonly [ipcChannels.setUnrestrictedMode]: SetUnrestrictedModeRequest;
-  readonly [ipcChannels.listProcesses]: undefined;
-  readonly [ipcChannels.startProcess]: StartProcessRequest;
-  readonly [ipcChannels.stopProcess]: StopProcessRequest;
-  readonly [ipcChannels.startMcp]: StartMcpRequest;
-  readonly [ipcChannels.stopMcp]: undefined;
-  readonly [ipcChannels.restartMcp]: undefined;
-  readonly [ipcChannels.clearWorkLog]: undefined;
-  readonly [ipcChannels.saveTunnelApiKey]: SaveTunnelApiKeyRequest;
-  readonly [ipcChannels.startTunnel]: undefined;
-  readonly [ipcChannels.stopTunnel]: undefined;
-  readonly [ipcChannels.getTunnelStatus]: undefined;
-  readonly [ipcChannels.setTunnelClientPath]: SetTunnelClientPathRequest;
-  readonly [ipcChannels.setLocale]: SetLocaleRequest;
-  readonly [ipcChannels.launchManagedBrowser]: undefined;
-  readonly [ipcChannels.runDoctor]: undefined;
-  readonly [ipcChannels.getLogSnapshot]: undefined;
-  readonly [ipcChannels.clearLogBuffer]: ClearLogBufferRequest;
-  readonly [ipcChannels.exportLogs]: ExportLogsRequest;
-  readonly [ipcChannels.openLogViewer]: undefined;
+export interface ApiRequestMap {
+  readonly listWorkspaces: undefined;
+  readonly addWorkspace: AddWorkspaceRequest;
+  readonly selectWorkspace: SelectWorkspaceRequest;
+  readonly getDashboard: undefined;
+  readonly setPermissionProfile: SetPermissionProfileRequest;
+  readonly setUnrestrictedMode: SetUnrestrictedModeRequest;
+  readonly listProcesses: undefined;
+  readonly startProcess: StartProcessRequest;
+  readonly stopProcess: StopProcessRequest;
+  readonly startMcp: StartMcpRequest;
+  readonly stopMcp: undefined;
+  readonly restartMcp: undefined;
+  readonly clearWorkLog: undefined;
+  readonly saveTunnelApiKey: SaveTunnelApiKeyRequest;
+  readonly startTunnel: undefined;
+  readonly stopTunnel: undefined;
+  readonly getTunnelStatus: undefined;
+  readonly setTunnelClientPath: SetTunnelClientPathRequest;
+  readonly setLocale: SetLocaleRequest;
+  readonly launchManagedBrowser: undefined;
+  readonly runDoctor: undefined;
+  readonly getLogSnapshot: undefined;
+  readonly clearLogBuffer: ClearLogBufferRequest;
+  readonly exportLogs: ExportLogsRequest;
+  readonly openLogViewer: undefined;
 }
 
-export interface IpcResponseMap {
-  readonly [ipcChannels.listWorkspaces]: readonly WorkspaceSummary[];
-  readonly [ipcChannels.addWorkspace]: WorkspaceSummary;
-  readonly [ipcChannels.selectWorkspace]: WorkspaceSummary;
-  readonly [ipcChannels.getDashboard]: DashboardSnapshot;
-  readonly [ipcChannels.setPermissionProfile]: { readonly profile: PermissionProfileName };
-  readonly [ipcChannels.setUnrestrictedMode]: { readonly unrestricted: boolean; readonly restartRequired: boolean };
-  readonly [ipcChannels.listProcesses]: readonly ProcessSummary[];
-  readonly [ipcChannels.startProcess]: ProcessSummary;
-  readonly [ipcChannels.stopProcess]: { readonly stopped: boolean };
-  readonly [ipcChannels.startMcp]: McpConnectionStatus;
-  readonly [ipcChannels.stopMcp]: McpConnectionStatus;
-  readonly [ipcChannels.restartMcp]: McpConnectionStatus;
-  readonly [ipcChannels.clearWorkLog]: { readonly cleared: boolean };
-  readonly [ipcChannels.saveTunnelApiKey]: { readonly saved: boolean };
-  readonly [ipcChannels.startTunnel]: TunnelStatus;
-  readonly [ipcChannels.stopTunnel]: TunnelStatus;
-  readonly [ipcChannels.getTunnelStatus]: TunnelStatus;
-  readonly [ipcChannels.setTunnelClientPath]: { readonly clientPath: string };
-  readonly [ipcChannels.setLocale]: { readonly locale: UiLocale };
-  readonly [ipcChannels.launchManagedBrowser]: ManagedBrowserStatus;
-  readonly [ipcChannels.runDoctor]: DoctorReport;
-  readonly [ipcChannels.getLogSnapshot]: LogSnapshot;
-  readonly [ipcChannels.clearLogBuffer]: { readonly cleared: boolean };
-  readonly [ipcChannels.exportLogs]: { readonly exported: boolean };
-  readonly [ipcChannels.openLogViewer]: { readonly opened: boolean };
+export interface ApiResponseMap {
+  readonly listWorkspaces: readonly WorkspaceSummary[];
+  readonly addWorkspace: WorkspaceSummary;
+  readonly selectWorkspace: WorkspaceSummary;
+  readonly getDashboard: DashboardSnapshot;
+  readonly setPermissionProfile: { readonly profile: PermissionProfileName };
+  readonly setUnrestrictedMode: { readonly unrestricted: boolean; readonly restartRequired: boolean };
+  readonly listProcesses: readonly ProcessSummary[];
+  readonly startProcess: ProcessSummary;
+  readonly stopProcess: { readonly stopped: boolean };
+  readonly startMcp: McpConnectionStatus;
+  readonly stopMcp: McpConnectionStatus;
+  readonly restartMcp: McpConnectionStatus;
+  readonly clearWorkLog: { readonly cleared: boolean };
+  readonly saveTunnelApiKey: { readonly saved: boolean };
+  readonly startTunnel: TunnelStatus;
+  readonly stopTunnel: TunnelStatus;
+  readonly getTunnelStatus: TunnelStatus;
+  readonly setTunnelClientPath: { readonly clientPath: string };
+  readonly setLocale: { readonly locale: UiLocale };
+  readonly launchManagedBrowser: ManagedBrowserStatus;
+  readonly runDoctor: DoctorReport;
+  readonly getLogSnapshot: LogSnapshot;
+  readonly clearLogBuffer: { readonly cleared: boolean };
+  readonly exportLogs: { readonly exported: boolean };
+  readonly openLogViewer: { readonly opened: boolean };
 }
 
-export interface LnwjudApi {
-  listWorkspaces(): Promise<IpcResponseMap[typeof ipcChannels.listWorkspaces]>;
-  addWorkspace(request: AddWorkspaceRequest): Promise<IpcResponseMap[typeof ipcChannels.addWorkspace]>;
-  selectWorkspace(request: SelectWorkspaceRequest): Promise<IpcResponseMap[typeof ipcChannels.selectWorkspace]>;
-  getDashboard(): Promise<IpcResponseMap[typeof ipcChannels.getDashboard]>;
-  setPermissionProfile(request: SetPermissionProfileRequest): Promise<IpcResponseMap[typeof ipcChannels.setPermissionProfile]>;
-  setUnrestrictedMode(request: SetUnrestrictedModeRequest): Promise<IpcResponseMap[typeof ipcChannels.setUnrestrictedMode]>;
-  listProcesses(): Promise<IpcResponseMap[typeof ipcChannels.listProcesses]>;
-  startProcess(request: StartProcessRequest): Promise<IpcResponseMap[typeof ipcChannels.startProcess]>;
-  stopProcess(request: StopProcessRequest): Promise<IpcResponseMap[typeof ipcChannels.stopProcess]>;
-  startMcp(request: StartMcpRequest): Promise<IpcResponseMap[typeof ipcChannels.startMcp]>;
-  stopMcp(): Promise<IpcResponseMap[typeof ipcChannels.stopMcp]>;
-  restartMcp(): Promise<IpcResponseMap[typeof ipcChannels.restartMcp]>;
-  clearWorkLog(): Promise<IpcResponseMap[typeof ipcChannels.clearWorkLog]>;
-  saveTunnelApiKey(request: SaveTunnelApiKeyRequest): Promise<IpcResponseMap[typeof ipcChannels.saveTunnelApiKey]>;
-  startTunnel(): Promise<IpcResponseMap[typeof ipcChannels.startTunnel]>;
-  stopTunnel(): Promise<IpcResponseMap[typeof ipcChannels.stopTunnel]>;
-  getTunnelStatus(): Promise<IpcResponseMap[typeof ipcChannels.getTunnelStatus]>;
-  setTunnelClientPath(request: SetTunnelClientPathRequest): Promise<IpcResponseMap[typeof ipcChannels.setTunnelClientPath]>;
-  setLocale(request: SetLocaleRequest): Promise<IpcResponseMap[typeof ipcChannels.setLocale]>;
-  launchManagedBrowser(): Promise<IpcResponseMap[typeof ipcChannels.launchManagedBrowser]>;
-  runDoctor(): Promise<IpcResponseMap[typeof ipcChannels.runDoctor]>;
-  getLogSnapshot(): Promise<IpcResponseMap[typeof ipcChannels.getLogSnapshot]>;
-  clearLogBuffer(request: ClearLogBufferRequest): Promise<IpcResponseMap[typeof ipcChannels.clearLogBuffer]>;
-  exportLogs(request: ExportLogsRequest): Promise<IpcResponseMap[typeof ipcChannels.exportLogs]>;
-  openLogViewer(): Promise<IpcResponseMap[typeof ipcChannels.openLogViewer]>;
-  onLogEvent(callback: (line: LogLine) => void): () => void;
+/** Renderer-side fetch client contract (apps/desktop/src/renderer/api/client.ts). */
+export interface DashboardApiClient {
+  listWorkspaces(): Promise<ApiResponseMap['listWorkspaces']>;
+  addWorkspace(request: AddWorkspaceRequest): Promise<ApiResponseMap['addWorkspace']>;
+  selectWorkspace(request: SelectWorkspaceRequest): Promise<ApiResponseMap['selectWorkspace']>;
+  getDashboard(): Promise<ApiResponseMap['getDashboard']>;
+  setPermissionProfile(request: SetPermissionProfileRequest): Promise<ApiResponseMap['setPermissionProfile']>;
+  setUnrestrictedMode(request: SetUnrestrictedModeRequest): Promise<ApiResponseMap['setUnrestrictedMode']>;
+  listProcesses(): Promise<ApiResponseMap['listProcesses']>;
+  startProcess(request: StartProcessRequest): Promise<ApiResponseMap['startProcess']>;
+  stopProcess(request: StopProcessRequest): Promise<ApiResponseMap['stopProcess']>;
+  startMcp(request: StartMcpRequest): Promise<ApiResponseMap['startMcp']>;
+  stopMcp(): Promise<ApiResponseMap['stopMcp']>;
+  restartMcp(): Promise<ApiResponseMap['restartMcp']>;
+  clearWorkLog(): Promise<ApiResponseMap['clearWorkLog']>;
+  saveTunnelApiKey(request: SaveTunnelApiKeyRequest): Promise<ApiResponseMap['saveTunnelApiKey']>;
+  startTunnel(): Promise<ApiResponseMap['startTunnel']>;
+  stopTunnel(): Promise<ApiResponseMap['stopTunnel']>;
+  getTunnelStatus(): Promise<ApiResponseMap['getTunnelStatus']>;
+  setTunnelClientPath(request: SetTunnelClientPathRequest): Promise<ApiResponseMap['setTunnelClientPath']>;
+  setLocale(request: SetLocaleRequest): Promise<ApiResponseMap['setLocale']>;
+  launchManagedBrowser(): Promise<ApiResponseMap['launchManagedBrowser']>;
+  runDoctor(): Promise<ApiResponseMap['runDoctor']>;
+  getLogSnapshot(): Promise<ApiResponseMap['getLogSnapshot']>;
+  clearLogBuffer(request: ClearLogBufferRequest): Promise<ApiResponseMap['clearLogBuffer']>;
+  exportLogs(request: ExportLogsRequest): Promise<ApiResponseMap['exportLogs']>;
+  openLogViewer(): Promise<ApiResponseMap['openLogViewer']>;
 }
